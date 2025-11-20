@@ -1,116 +1,119 @@
 # app.py
-from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify
-import uuid
+from datetime import datetime, timedelta
+import sqlite3
+import os
 
 app = Flask(__name__)
 
-# -----------------------
-#  ヘルスチェック用
-# -----------------------
-@app.get("/health")
+# v2: グリッド対応した DB（古い pings.db とは別ファイルにする）
+DB_PATH = os.path.join(os.path.dirname(__file__), "pings_v2.db")
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            status TEXT,
+            region_code TEXT,
+            city_name TEXT,
+            grid_id TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+@app.route("/health")
 def health():
-    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z"})
+    return jsonify(
+        {"status": "ok", "time": datetime.utcnow().isoformat() + "Z"}
+    )
 
 
-# -----------------------
-#  仮の in-memory ストア
-# -----------------------
-# 本番では DB に置き換えるが、まずはメモリで動作確認だけする
-pings: list[dict] = []
+# 緯度経度 → グリッドID（ざっくり5〜10km）
+def make_grid_id(lat: float, lng: float, grid_size: float = 0.1) -> str:
+    """
+    grid_size=0.1度 ≒ 緯度方向で約11km
+    ここはあとで調整してOK
+    """
+    lat_index = round(lat / grid_size)
+    lng_index = round(lng / grid_size)
+    return f"{lat_index}:{lng_index}"
 
 
-def now_utc():
-    return datetime.now(timezone.utc)
-
-
-# ★ Ping を新規作成（アプリから呼ぶ想定）
-@app.post("/api/pings")
+@app.route("/api/pings", methods=["POST"])
 def create_ping():
-    data = request.get_json() or {}
+    data = request.get_json(force=True, silent=True) or {}
 
-    status = data.get("status")
-    region_code = data.get("region_code")
+    status = data.get("status") or "unknown"
+    region_code = data.get("region_code") or "unknown"
     city_name = data.get("city_name")
-    message = data.get("message")  # 課金ユーザーのみ有効にする想定
-    device_id = data.get("device_id") or str(uuid.uuid4())
+    lat = data.get("lat")
+    lng = data.get("lng")
 
-    if status not in ["awake", "free", "cantSleep", "working"]:
-        return jsonify({"error": "invalid status"}), 400
-    if not region_code:
-        return jsonify({"error": "region_code is required"}), 400
-    if not city_name:
-        return jsonify({"error": "city_name is required"}), 400
+    grid_id = None
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+        grid_id = make_grid_id(float(lat), float(lng))
 
-    ping = {
-        "id": str(uuid.uuid4()),
-        "device_id": device_id,
-        "status": status,
-        "region_code": region_code,
-        "city_name": city_name,
-        "message": message or None,
-        "created_at": now_utc().isoformat(),
-    }
+    created_at = datetime.utcnow().isoformat()
 
-    pings.append(ping)
-    return jsonify(ping), 201
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO pings (status, region_code, city_name, grid_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (status, region_code, city_name, grid_id, created_at),
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify({"ok": True})
 
 
-# ★ 直近30分の「エリア別人数」を返す
-@app.get("/api/pings/summary")
-def pings_summary():
-    cutoff = now_utc() - timedelta(minutes=30)
+@app.route("/api/pings/summary")
+def summary():
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=30)
+    cutoff_iso = cutoff.isoformat()
 
-    recent = []
-    for p in pings:
-        try:
-            created = datetime.fromisoformat(p["created_at"])
-        except Exception:
-            continue
-        if created >= cutoff:
-            recent.append(p)
-
-    summary: dict[str, int] = {}
-    for p in recent:
-        region = p["region_code"]
-        summary[region] = summary.get(region, 0) + 1
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT region_code, COUNT(*) AS count
+        FROM pings
+        WHERE created_at >= ?
+        GROUP BY region_code
+        """,
+        (cutoff_iso,),
+    )
+    rows = cur.fetchall()
+    conn.close()
 
     result = [
-        {"region_code": region, "count": count}
-        for region, count in summary.items()
+        {"region_code": row["region_code"], "count": row["count"]}
+        for row in rows
     ]
-
-    return jsonify(result), 200
-
-
-# ★ 特定エリアの一覧（市区町村＋ステータス・メッセージ）
-@app.get("/api/pings")
-def list_pings():
-    region_code = request.args.get("region_code")
-    city_name = request.args.get("city_name")  # 任意
-
-    cutoff = now_utc() - timedelta(minutes=30)
-
-    result = []
-    for p in pings:
-        try:
-            created = datetime.fromisoformat(p["created_at"])
-        except Exception:
-            continue
-
-        if created < cutoff:
-            continue
-
-        if region_code and p["region_code"] != region_code:
-            continue
-        if city_name and p["city_name"] != city_name:
-            continue
-
-        result.append(p)
-
-    return jsonify(result), 200
+    return jsonify(result)
 
 
-# ローカル実行用エントリポイント
 if __name__ == "__main__":
+    # ローカルテスト用
     app.run(debug=True)
