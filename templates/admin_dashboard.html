@@ -5,26 +5,38 @@
   <title>HerePing 管理ダッシュボード</title>
   <style>
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      padding: 16px;
-      background: #111827;
+      background: #020617;
       color: #e5e7eb;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 0;
     }
-    h1, h2 {
-      color: #f9fafb;
+    h1 {
+      padding: 20px;
+      font-size: 28px;
+    }
+    .card {
+      margin: 0 20px 20px;
+      padding: 16px 20px;
+      border-radius: 12px;
+      background: #020617;
+      border: 1px solid #1f2937;
+    }
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
     }
     pre {
       background: #020617;
       padding: 12px;
       border-radius: 8px;
+      font-size: 12px;
       overflow-x: auto;
+      border: 1px solid #111827;
     }
-    .card {
-      margin-bottom: 24px;
-      border-radius: 12px;
-      padding: 16px;
-      background: #020617;
-      border: 1px solid #1f2937;
+    .empty {
+      font-size: 12px;
+      color: #9ca3af;
     }
   </style>
 </head>
@@ -33,33 +45,63 @@
 
   <div class="card">
     <h2>直近30分のエリア別ピコン数（/api/pings/map）</h2>
-    <pre id="realtime">loading...</pre>
+    <div id="realtimeEmpty" class="empty" style="display:none;">
+      直近30分以内のピコンはまだありません。
+    </div>
+    <pre id="realtime">読み込み中...</pre>
   </div>
 
   <div class="card">
     <h2>累計エリア別ピコン数（/api/pings/map_total）</h2>
-    <pre id="total">loading...</pre>
+    <div id="totalEmpty" class="empty" style="display:none;">
+      まだ累計データがありません。
+    </div>
+    <pre id="total">読み込み中...</pre>
   </div>
 
   <div class="card">
     <h2>詳細統計（/api/admin/ping_stats）</h2>
-    <pre id="stats">loading...</pre>
+    <div class="empty" style="margin-bottom:4px;">
+      city_stats / region_stats / grid_stats をそのまま表示します。
+    </div>
+    <pre id="detail">読み込み中...</pre>
   </div>
 
   <script>
     async function load() {
-      const [realtime, total, stats] = await Promise.all([
-        fetch('/api/pings/map').then(r => r.json()),
-        fetch('/api/pings/map_total').then(r => r.json()),
-        fetch('/api/admin/ping_stats').then(r => r.json()),
-      ]);
+      try {
+        const realtime = await fetch('/api/pings/map').then(r => r.json());
+        const total = await fetch('/api/pings/map_total').then(r => r.json());
+        const detail = await fetch('/api/admin/ping_stats').then(r => r.json());
 
-      document.getElementById('realtime').textContent =
-        JSON.stringify(realtime, null, 2);
-      document.getElementById('total').textContent =
-        JSON.stringify(total, null, 2);
-      document.getElementById('stats').textContent =
-        JSON.stringify(stats, null, 2);
+        // 直近30分
+        if (Array.isArray(realtime) && realtime.length === 0) {
+          document.getElementById('realtimeEmpty').style.display = 'block';
+          document.getElementById('realtime').textContent = '[]';
+        } else {
+          document.getElementById('realtimeEmpty').style.display = 'none';
+          document.getElementById('realtime').textContent =
+            JSON.stringify(realtime, null, 2);
+        }
+
+        // 累計
+        if (Array.isArray(total) && total.length === 0) {
+          document.getElementById('totalEmpty').style.display = 'block';
+          document.getElementById('total').textContent = '[]';
+        } else {
+          document.getElementById('totalEmpty').style.display = 'none';
+          document.getElementById('total').textContent =
+            JSON.stringify(total, null, 2);
+        }
+
+        // 詳細
+        document.getElementById('detail').textContent =
+          JSON.stringify(detail, null, 2);
+      } catch (e) {
+        document.getElementById('realtime').textContent = 'エラー: ' + e;
+        document.getElementById('total').textContent = 'エラー: ' + e;
+        document.getElementById('detail').textContent = 'エラー: ' + e;
+      }
     }
     load();
   </script>
