@@ -3,10 +3,35 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
-from flask import Flask, request, jsonify, render_template
+from functools import wraps
+from flask import Flask, request, jsonify, render_template, Response
 
 app = Flask(__name__)
 
+# Basic認証用のチェック関数
+def check_auth(username: str, password: str) -> bool:
+    """環境変数に設定したユーザー名・パスワードと比較"""
+    admin_user = os.environ.get("ADMIN_USER", "admin")
+    admin_pass = os.environ.get("ADMIN_PASS", "changeme")
+    return username == admin_user and password == admin_pass
+
+def authenticate():
+    """401 を返してブラウザにBasic認証ダイアログを出させる"""
+    return Response(
+        "Authentication required", 401,
+        {"WWW-Authenticate": 'Basic realm="HerePing Admin"'}
+    )
+
+def requires_auth(f):
+    """/admin/dashboard 用のデコレーター"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+    
 # 管理用の簡易シークレット（本番では環境変数で上書き推奨）
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev-secret")
 
@@ -385,8 +410,8 @@ def ping_summary_status():
     return jsonify(result)
 
 @app.route("/admin/dashboard")
+@requires_auth
 def admin_dashboard():
-    # ログイン制御を付けるならここでチェック
     return render_template("admin_dashboard.html")
 
 if __name__ == "__main__":
