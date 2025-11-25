@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>HerePing 管理ダッシュボード</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 16px;
+      background: #111827;
+      color: #e5e7eb;
+    }
+    h1, h2 {
+      color: #f9fafb;
+    }
+    pre {
+      background: #020617;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    .card {
+      margin-bottom: 24px;
+      border-radius: 12px;
+      padding: 16px;
+      background: #020617;
+      border: 1px solid #1f2937;
+    }
+  </style>
+</head>
+<body>
+  <h1>HerePing 管理ダッシュボード</h1>
+
+  <div class="card">
+    <h2>直近30分のエリア別ピコン数（/api/pings/map）</h2>
+    <pre id="realtime">loading...</pre>
+  </div>
+
+  <div class="card">
+    <h2>累計エリア別ピコン数（/api/pings/map_total）</h2>
+    <pre id="total">loading...</pre>
+  </div>
+
+  <div class="card">
+    <h2>詳細統計（/api/admin/ping_stats）</h2>
+    <pre id="stats">loading...</pre>
+  </div>
+
+  <script>
+    async function load() {
+      const [realtime, total, stats] = await Promise.all([
+        fetch('/api/pings/map').then(r => r.json()),
+        fetch('/api/pings/map_total').then(r => r.json()),
+        fetch('/api/admin/ping_stats').then(r => r.json()),
+      ]);
+
+      document.getElementById('realtime').textContent =
+        JSON.stringify(realtime, null, 2);
+      document.getElementById('total').textContent =
+        JSON.stringify(total, null, 2);
+      document.getElementById('stats').textContent =
+        JSON.stringify(stats, null, 2);
+    }
+    load();
+  </script>
+</body>
+</html>
