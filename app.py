@@ -273,6 +273,68 @@ def pings_map():
 
     return jsonify(result)
 
+@app.route("/api/pings/map_total")
+def pings_map_total():
+    """エリアごとの累計ピコン数（時間条件なし）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT region_code, COUNT(*)
+        FROM pings
+        GROUP BY region_code
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    result = []
+    for region_code, count in rows:
+        meta = REGION_CENTER.get(region_code)
+        if not meta:
+            continue
+        result.append(
+            {
+                "lat": meta["lat"],
+                "lng": meta["lng"],
+                "count": int(count),
+                "label": meta["label"],
+            }
+        )
+
+    return jsonify(result)
+
+@app.route("/api/pings/summary_status")
+def ping_summary_status():
+    minutes_str = request.args.get("minutes", "30")
+    try:
+        minutes = int(minutes_str)
+    except ValueError:
+        minutes = 30
+
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    cutoff_iso = cutoff.isoformat()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT region_code, status, COUNT(*) AS count
+        FROM pings
+        WHERE created_at >= ?
+        GROUP BY region_code, status
+        """,
+        (cutoff_iso,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    result = [
+      {"region_code": r, "status": s, "count": c}
+      for (r, s, c) in rows
+    ]
+    return jsonify(result)
+
 if __name__ == "__main__":
     # ローカルテスト用
     app.run(debug=True)
