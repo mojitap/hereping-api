@@ -3,9 +3,12 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
+
+# 管理用の簡易シークレット（本番では環境変数で上書き推奨）
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev-secret")
 
 # v1で許可するステータス
 ALLOWED_STATUS = {"awake", "free", "cantSleep", "working"}
@@ -208,6 +211,52 @@ def admin_ping_stats():
         }
     )
 
+@app.route("/api/admin/cleanup_old_pings")
+def cleanup_old_pings():
+    """
+    古い Ping をまとめて削除する簡易API。
+    デフォルトは「1日より前」を削除。
+    /api/admin/cleanup_old_pings?token=...&days=3 みたいに指定も可能。
+    """
+    # まずは簡単な“鍵”チェック
+    token = request.args.get("token")
+    if token != ADMIN_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    # 何日前より前を消すか（デフォルト1日）
+    days_str = request.args.get("days", "1")
+    try:
+        days = int(days_str)
+        if days < 0:
+            days = 1
+    except ValueError:
+        days = 1
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff_iso = cutoff.isoformat()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        DELETE FROM pings
+        WHERE created_at < ?
+        """,
+        (cutoff_iso,),
+    )
+    deleted_rows = cur.rowcount
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "deleted": deleted_rows,
+            "cutoff_iso": cutoff_iso,
+            "days": days,
+        }
+    )
+
 # --- 直近30分のサマリー API --------------------------------------
 
 
@@ -334,6 +383,11 @@ def ping_summary_status():
       for (r, s, c) in rows
     ]
     return jsonify(result)
+
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    # ログイン制御を付けるならここでチェック
+    return render_template("admin_dashboard.html")
 
 if __name__ == "__main__":
     # ローカルテスト用
