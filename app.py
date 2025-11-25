@@ -31,7 +31,7 @@ def requires_auth(f):
             return authenticate()
         return f(*args, **kwargs)
     return decorated
-    
+
 # 管理用の簡易シークレット（本番では環境変数で上書き推奨）
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "dev-secret")
 
@@ -174,8 +174,6 @@ def create_ping():
     conn.close()
 
     return jsonify({"ok": True}), 201
-
-from datetime import timedelta
 
 @app.route("/api/admin/ping_stats")
 def admin_ping_stats():
