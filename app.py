@@ -146,6 +146,15 @@ def create_ping():
     lat_val = round_coord(raw_lat, 2)
     lng_val = round_coord(raw_lng, 2)
 
+    if lat_val is not None and lng_val is not None:
+        if not (-85 <= lat_val <= 85 and -180 <= lng_val <= 180):
+            lat_val = None
+            lng_val = None
+        elif lat_val == 0 and lng_val == 0:
+            # 位置情報が取れなかったケースを弾く
+            lat_val = None
+            lng_val = None
+
     # area_code の計算も丸めた値を使う
     area_code = compute_area_code(lat_val, lng_val, region_code)
 
@@ -197,7 +206,7 @@ def admin_ping_stats():
     )
     region_rows = cur.fetchall()
 
-    # 市ごとの人数（全期間。必要なら created_at 条件を足す）
+    # 市ごとの人数（全期間）
     cur.execute(
         """
         SELECT city_name, COUNT(*)
@@ -207,21 +216,37 @@ def admin_ping_stats():
     )
     city_rows = cur.fetchall()
 
+    # 直近1時間の「生の lat / lng ごと」に一旦集計（NULL は除外）
+    cur.execute(
+        """
+        SELECT lat, lng, COUNT(*)
+        FROM pings
+        WHERE created_at >= ?
+          AND lat IS NOT NULL
+          AND lng IS NOT NULL
+        GROUP BY lat, lng
+        """,
+        (cutoff_iso,),
+    )
+    raw_grid_rows = cur.fetchall()
+
     conn.close()
 
-    # ★ grid_stats は「エリアごとの代表座標＋人数」にする
-    grid_stats = []
-    for region_code, count in region_rows:
-        meta = REGION_CENTER.get(region_code)
-        if not meta:
-            continue
-        grid_stats.append(
-            {
-                "lat": meta["lat"],
-                "lng": meta["lng"],
-                "count": int(count),
-            }
-        )
+    # ★ 世界共通の「粗いグリッド」（例: 0.2度 ≒ 20〜22km）に丸め直す
+    CELL_DEG = 0.2  # ここを 0.25 とかに変えればさらに粗くできる
+    grid_map = {}   # {(cell_lat, cell_lng): count}
+
+    for lat, lng, c in raw_grid_rows:
+        # 0.2度単位で丸めて代表点を作る
+        cell_lat = round(lat / CELL_DEG) * CELL_DEG
+        cell_lng = round(lng / CELL_DEG) * CELL_DEG
+        key = (cell_lat, cell_lng)
+        grid_map[key] = grid_map.get(key, 0) + c
+
+    grid_stats = [
+        {"lat": lat, "lng": lng, "count": count}
+        for (lat, lng), count in grid_map.items()
+    ]
 
     return jsonify(
         {
