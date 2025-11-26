@@ -109,7 +109,8 @@ REGION_CENTER = {
     "kansai":          {"lat": 34.7, "lng": 135.5, "label": "関西"},
     "chugoku_shikoku": {"lat": 34.3, "lng": 133.0, "label": "中国・四国"},
     "kyushu_okinawa":  {"lat": 32.0, "lng": 130.7, "label": "九州・沖縄"},
-    "world_other":     {"lat": 30.0, "lng":   0.0, "label": "World"},
+    # World はパリ近辺とか、どこか確実に陸の場所にしておく
+    "world_other":     {"lat": 48.85, "lng": 2.35, "label": "World"},
 }
 
 # --- Ping 登録 API ----------------------------------------------
@@ -206,19 +207,21 @@ def admin_ping_stats():
     )
     city_rows = cur.fetchall()
 
-    # 丸めた緯度経度ごとの人数（1kmグリッド）
-    cur.execute(
-        """
-        SELECT lat, lng, COUNT(*)
-        FROM pings
-        WHERE created_at >= ?
-        GROUP BY lat, lng
-        """,
-        (cutoff_iso,),
-    )
-    grid_rows = cur.fetchall()
-
     conn.close()
+
+    # ★ grid_stats は「エリアごとの代表座標＋人数」にする
+    grid_stats = []
+    for region_code, count in region_rows:
+        meta = REGION_CENTER.get(region_code)
+        if not meta:
+            continue
+        grid_stats.append(
+            {
+                "lat": meta["lat"],
+                "lng": meta["lng"],
+                "count": int(count),
+            }
+        )
 
     return jsonify(
         {
@@ -228,9 +231,7 @@ def admin_ping_stats():
             "city_stats": [
                 {"city_name": name, "count": c} for (name, c) in city_rows
             ],
-            "grid_stats": [
-                {"lat": lat, "lng": lng, "count": c} for (lat, lng, c) in grid_rows
-            ],
+            "grid_stats": grid_stats,
         }
     )
 
