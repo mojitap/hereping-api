@@ -260,6 +260,54 @@ def admin_ping_stats():
         }
     )
 
+@app.route("/api/pings/grid_status")
+def pings_grid_status():
+    """
+    直近30分の「グリッドごとのステータス内訳」を返す。
+    フロントのマップ用（ピンをタップしたときに 👀/🌀/🌙/💻 を出す）。
+    """
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    cutoff_iso = cutoff.isoformat()
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # lat/lng, status ごとに集計
+    cur.execute(
+        """
+        SELECT lat, lng, status, COUNT(*)
+        FROM pings
+        WHERE created_at >= ?
+          AND lat IS NOT NULL
+          AND lng IS NOT NULL
+        GROUP BY lat, lng, status
+        """,
+        (cutoff_iso,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    # {(lat,lng): {"awake": x, "free": y, ...}} にまとめる
+    grid_map = {}
+    for lat, lng, status, c in rows:
+        key = (float(lat), float(lng))
+        if key not in grid_map:
+            grid_map[key] = {"awake": 0, "free": 0, "cantSleep": 0, "working": 0}
+        if status in grid_map[key]:
+            grid_map[key][status] += int(c)
+
+    result = []
+    for (lat, lng), counts in grid_map.items():
+        result.append(
+            {
+                "lat": lat,
+                "lng": lng,
+                "counts": counts,
+            }
+        )
+
+    return jsonify(result)
+
 @app.route("/api/admin/cleanup_old_pings")
 def cleanup_old_pings():
     """
@@ -397,6 +445,47 @@ def pings_map_total():
                 "lng": meta["lng"],
                 "count": int(count),
                 "label": meta["label"],
+            }
+        )
+
+    return jsonify(result)
+
+@app.route("/api/pings/map_points")
+def pings_map_points():
+    """
+    マップ用: 1ピン = 1ユーザーの Ping 一覧を返す。
+    直近24時間・lat/lng が入っているものだけ。
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff_iso = cutoff.isoformat()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, status, lat, lng, message, created_at
+        FROM pings
+        WHERE created_at >= ?
+          AND lat IS NOT NULL
+          AND lng IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 500
+        """,
+        (cutoff_iso,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        result.append(
+            {
+                "id": row["id"],
+                "status": row["status"],
+                "lat": row["lat"],
+                "lng": row["lng"],
+                "hasMessage": bool(row["message"]),
+                "createdAt": row["created_at"],
             }
         )
 
