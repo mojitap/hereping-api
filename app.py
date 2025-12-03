@@ -237,14 +237,21 @@ def create_ping():
 
 @app.route("/api/admin/ping_stats")
 def admin_ping_stats():
-    """簡易的な統計: エリア別・市別・グリッド別の人数"""
-    cutoff = datetime.utcnow() - timedelta(hours=1)
+    """
+    管理用の統計:
+      - region_stats_recent: 直近30分のエリア別人数
+      - region_stats_total:  全期間のエリア別人数
+      - city_stats:          全期間の市区町村別人数
+      - grid_stats:          直近30分のグリッド別人数（マップ用）
+    """
+    # 直近30分
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
     cutoff_iso = cutoff.isoformat()
 
     conn = get_db()
     cur = conn.cursor()
 
-    # エリアごとの人数（直近1時間）
+    # A. エリアごとの人数（直近30分）
     cur.execute(
         """
         SELECT region_code, COUNT(*)
@@ -254,9 +261,19 @@ def admin_ping_stats():
         """,
         (cutoff_iso,),
     )
-    region_rows = cur.fetchall()
+    region_recent_rows = cur.fetchall()
 
-    # 市ごとの人数（全期間）
+    # B. エリアごとの累計人数（全期間）
+    cur.execute(
+        """
+        SELECT region_code, COUNT(*)
+        FROM pings
+        GROUP BY region_code
+        """
+    )
+    region_total_rows = cur.fetchall()
+
+    # C. 市ごとの人数（全期間）
     cur.execute(
         """
         SELECT city_name, COUNT(*)
@@ -266,7 +283,7 @@ def admin_ping_stats():
     )
     city_rows = cur.fetchall()
 
-    # 直近1時間の「生の lat / lng ごと」に一旦集計（NULL は除外）
+    # D. 直近30分の「生の lat / lng ごと」に一旦集計（NULL は除外）
     cur.execute(
         """
         SELECT lat, lng, COUNT(*)
@@ -288,10 +305,10 @@ def admin_ping_stats():
 
     for lat, lng, c in raw_grid_rows:
         # 0.2度単位で丸めて代表点を作る
-        cell_lat = round(lat / CELL_DEG) * CELL_DEG
-        cell_lng = round(lng / CELL_DEG) * CELL_DEG
+        cell_lat = round(float(lat) / CELL_DEG) * CELL_DEG
+        cell_lng = round(float(lng) / CELL_DEG) * CELL_DEG
         key = (cell_lat, cell_lng)
-        grid_map[key] = grid_map.get(key, 0) + c
+        grid_map[key] = grid_map.get(key, 0) + int(c)
 
     grid_stats = [
         {"lat": lat, "lng": lng, "count": count}
@@ -300,13 +317,17 @@ def admin_ping_stats():
 
     return jsonify(
         {
-            "region_stats": [
-                {"region_code": r, "count": c} for (r, c) in region_rows
+            "region_stats_recent": [
+                {"region_code": r, "count": int(c)} for (r, c) in region_recent_rows
+            ],
+            "region_stats_total": [
+                {"region_code": r, "count": int(c)} for (r, c) in region_total_rows
             ],
             "city_stats": [
-                {"city_name": name, "count": c} for (name, c) in city_rows
+                {"city_name": name, "count": int(c)} for (name, c) in city_rows
             ],
             "grid_stats": grid_stats,
+            "cutoff_iso": cutoff_iso,
         }
     )
 
