@@ -1,109 +1,325 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>HerePing 管理ダッシュボード</title>
-  <style>
-    body {
-      background: #020617;
-      color: #e5e7eb;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-    }
-    h1 {
-      padding: 20px;
-      font-size: 28px;
-    }
-    .card {
-      margin: 0 20px 20px;
-      padding: 16px 20px;
-      border-radius: 12px;
-      background: #020617;
-      border: 1px solid #1f2937;
-    }
-    .card h2 {
-      margin: 0 0 8px;
-      font-size: 18px;
-    }
-    pre {
-      background: #020617;
-      padding: 12px;
-      border-radius: 8px;
-      font-size: 12px;
-      overflow-x: auto;
-      border: 1px solid #111827;
-    }
-    .empty {
-      font-size: 12px;
-      color: #9ca3af;
-    }
-  </style>
-</head>
-<body>
-  <h1>HerePing 管理ダッシュボード</h1>
-
-  <div class="card">
-    <h2>直近30分のエリア別ピコン数（/api/pings/map）</h2>
-    <div id="realtimeEmpty" class="empty" style="display:none;">
-      直近30分以内のピコンはまだありません。
-    </div>
-    <pre id="realtime">読み込み中...</pre>
-  </div>
-
-  <div class="card">
-    <h2>累計エリア別ピコン数（/api/pings/map_total）</h2>
-    <div id="totalEmpty" class="empty" style="display:none;">
-      まだ累計データがありません。
-    </div>
-    <pre id="total">読み込み中...</pre>
-  </div>
-
-  <div class="card">
-    <h2>詳細統計（/api/admin/ping_stats）</h2>
-    <div class="empty" style="margin-bottom:4px;">
-      city_stats / region_stats / grid_stats をそのまま表示します。
-    </div>
-    <pre id="detail">読み込み中...</pre>
-  </div>
-
-  <script>
-    async function load() {
-      try {
-        const realtime = await fetch('/api/pings/map').then(r => r.json());
-        const total = await fetch('/api/pings/map_total').then(r => r.json());
-        const detail = await fetch('/api/admin/ping_stats').then(r => r.json());
-
-        // 直近30分
-        if (Array.isArray(realtime) && realtime.length === 0) {
-          document.getElementById('realtimeEmpty').style.display = 'block';
-          document.getElementById('realtime').textContent = '[]';
-        } else {
-          document.getElementById('realtimeEmpty').style.display = 'none';
-          document.getElementById('realtime').textContent =
-            JSON.stringify(realtime, null, 2);
-        }
-
-        // 累計
-        if (Array.isArray(total) && total.length === 0) {
-          document.getElementById('totalEmpty').style.display = 'block';
-          document.getElementById('total').textContent = '[]';
-        } else {
-          document.getElementById('totalEmpty').style.display = 'none';
-          document.getElementById('total').textContent =
-            JSON.stringify(total, null, 2);
-        }
-
-        // 詳細
-        document.getElementById('detail').textContent =
-          JSON.stringify(detail, null, 2);
-      } catch (e) {
-        document.getElementById('realtime').textContent = 'エラー: ' + e;
-        document.getElementById('total').textContent = 'エラー: ' + e;
-        document.getElementById('detail').textContent = 'エラー: ' + e;
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>HerePing World Admin Dashboard</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #0f172a;
+        color: #e5e7eb;
       }
-    }
-    load();
-  </script>
-</body>
+      header {
+        padding: 16px 24px;
+        border-bottom: 1px solid #1f2937;
+        background: #020617;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .container {
+        padding: 24px;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .card {
+        background: #020617;
+        border-radius: 12px;
+        padding: 16px 18px;
+        border: 1px solid #1f2937;
+      }
+      .card-title {
+        font-size: 13px;
+        color: #9ca3af;
+        margin-bottom: 8px;
+      }
+      .card-value {
+        font-size: 24px;
+        font-weight: 600;
+      }
+      .card-sub {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 4px;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 24px 0 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        border-radius: 8px;
+        overflow: hidden;
+        font-size: 13px;
+      }
+      th,
+      td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #111827;
+      }
+      th {
+        background: #020617;
+        text-align: left;
+        color: #9ca3af;
+        font-weight: 500;
+      }
+      tr:nth-child(even) td {
+        background: #020617;
+      }
+      tr:nth-child(odd) td {
+        background: #020617ee;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 6px;
+        border-radius: 999px;
+        border: 1px solid #4b5563;
+        font-size: 11px;
+        color: #e5e7eb;
+      }
+      .muted {
+        color: #6b7280;
+        font-size: 12px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        background: #1e293b;
+        color: #e5e7eb;
+      }
+      .badge-hot {
+        background: #b91c1c;
+        color: #fee2e2;
+      }
+      a {
+        color: #60a5fa;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>HerePing World – Admin Dashboard</h1>
+    </header>
+    <div class="container">
+      <div class="summary-grid">
+        <div class="card">
+          <div class="card-title">直近30分のアクティブ数（合計）</div>
+          <div class="card-value" id="summary-active">-</div>
+          <div class="card-sub" id="summary-active-sub">
+            loading...
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">累計ピコン数（エリア合計）</div>
+          <div class="card-value" id="summary-total">-</div>
+          <div class="card-sub">
+            /api/admin/ping_stats の region_stats_total より
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">市区町村のユニーク数（全期間）</div>
+          <div class="card-value" id="summary-city-count">-</div>
+          <div class="card-sub">city_stats のユニーク件数</div>
+        </div>
+      </div>
+
+      <h2>エリア別（直近30分）</h2>
+      <p class="muted">
+        「今ここにいるよ！」から30分以内の ping を region_code 単位で集計
+      </p>
+      <table id="region-table">
+        <thead>
+          <tr>
+            <th>Region</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <h2 style="margin-top: 32px;">市区町村ランキング（全期間）</h2>
+      <p class="muted">全期間の city_name を集計したトップ30件</p>
+      <table id="city-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>City</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <h2 style="margin-top: 32px;">グリッド統計（直近30分・ざっくりグリッド）</h2>
+      <p class="muted">
+        lat/lng を 0.2度グリッドに丸めて集計した結果。マップ用の参考値。
+      </p>
+      <table id="grid-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Lat</th>
+            <th>Lng</th>
+            <th>Count</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <script>
+      const REGION_LABELS = {
+        hokkaido_tohoku: "北海道・東北",
+        kanto: "関東",
+        chubu: "中部",
+        kansai: "関西",
+        chugoku_shikoku: "中国・四国",
+        kyushu_okinawa: "九州・沖縄",
+        world_other: "World / Other",
+      };
+
+      async function loadStats() {
+        try {
+          const res = await fetch("/api/admin/ping_stats");
+          if (!res.ok) {
+            throw new Error("HTTP " + res.status);
+          }
+          const data = await res.json();
+          console.log("admin ping_stats:", data);
+
+          const recent = data.region_stats_recent || [];
+          const total = data.region_stats_total || [];
+          const cities = data.city_stats || [];
+          const grids = data.grid_stats || [];
+          const cutoffIso = data.cutoff_iso;
+
+          // --- Summary: 直近30分合計 / 累計合計 / 市区町村ユニーク数 ---
+          const activeSum = recent.reduce((s, r) => s + (r.count || 0), 0);
+          const totalSum = total.reduce((s, r) => s + (r.count || 0), 0);
+
+          document.getElementById("summary-active").textContent =
+            activeSum.toString();
+          document.getElementById("summary-total").textContent =
+            totalSum.toString();
+          document.getElementById("summary-city-count").textContent =
+            cities.length.toString();
+
+          const cutoffLabel = cutoffIso
+            ? new Date(cutoffIso).toLocaleString("ja-JP", {
+                timeZone: "Asia/Tokyo",
+              })
+            : "";
+          document.getElementById(
+            "summary-active-sub"
+          ).textContent = `UTC基準で直近30分（${cutoffLabel} 以降）`;
+
+          // --- エリア別（直近30分）テーブル ---
+          const regionBody = document.querySelector(
+            "#region-table tbody"
+          );
+          regionBody.innerHTML = "";
+
+          recent.forEach((row) => {
+            const tr = document.createElement("tr");
+            const label =
+              REGION_LABELS[row.region_code] || row.region_code || "unknown";
+            const tdRegion = document.createElement("td");
+            const tdCount = document.createElement("td");
+
+            tdRegion.textContent = label;
+            tdCount.innerHTML =
+              row.count >= 10
+                ? `<span class="badge badge-hot">${row.count}</span>`
+                : `<span class="badge">${row.count}</span>`;
+
+            tr.appendChild(tdRegion);
+            tr.appendChild(tdCount);
+            regionBody.appendChild(tr);
+          });
+
+          // --- 市区町村ランキング（上位30件） ---
+          const sortedCities = [...cities]
+            .filter((c) => c.city_name)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 30);
+
+          const cityBody = document.querySelector("#city-table tbody");
+          cityBody.innerHTML = "";
+
+          sortedCities.forEach((row, idx) => {
+            const tr = document.createElement("tr");
+
+            const tdRank = document.createElement("td");
+            tdRank.textContent = String(idx + 1);
+
+            const tdCity = document.createElement("td");
+            tdCity.textContent = row.city_name || "(unknown)";
+
+            const tdCount = document.createElement("td");
+            tdCount.innerHTML =
+              row.count >= 10
+                ? `<span class="badge badge-hot">${row.count}</span>`
+                : `<span class="badge">${row.count}</span>`;
+
+            tr.appendChild(tdRank);
+            tr.appendChild(tdCity);
+            tr.appendChild(tdCount);
+            cityBody.appendChild(tr);
+          });
+
+          // --- グリッド統計 ---
+          const gridBody = document.querySelector("#grid-table tbody");
+          gridBody.innerHTML = "";
+
+          grids
+            .slice(0, 100) // 多すぎると重いのでひとまず100件まで
+            .forEach((row, idx) => {
+              const tr = document.createElement("tr");
+
+              const tdRank = document.createElement("td");
+              tdRank.textContent = String(idx + 1);
+
+              const tdLat = document.createElement("td");
+              tdLat.textContent = Number(row.lat).toFixed(3);
+
+              const tdLng = document.createElement("td");
+              tdLng.textContent = Number(row.lng).toFixed(3);
+
+              const tdCount = document.createElement("td");
+              tdCount.innerHTML =
+                row.count >= 10
+                  ? `<span class="badge badge-hot">${row.count}</span>`
+                  : `<span class="badge">${row.count}</span>`;
+
+              tr.appendChild(tdRank);
+              tr.appendChild(tdLat);
+              tr.appendChild(tdLng);
+              tr.appendChild(tdCount);
+              gridBody.appendChild(tr);
+            });
+        } catch (e) {
+          console.error("loadStats error:", e);
+          alert("統計情報の読み込みに失敗しました");
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", loadStats);
+    </script>
+  </body>
 </html>
