@@ -146,44 +146,94 @@ def create_ping():
     lat_val = round_coord(raw_lat, 2)
     lng_val = round_coord(raw_lng, 2)
 
+    # 範囲チェック & (0,0) 無効化
     if lat_val is not None and lng_val is not None:
         if not (-85 <= lat_val <= 85 and -180 <= lng_val <= 180):
             lat_val = None
             lng_val = None
         elif lat_val == 0 and lng_val == 0:
-            # 位置情報が取れなかったケースを弾く
             lat_val = None
             lng_val = None
 
     # area_code の計算も丸めた値を使う
     area_code = compute_area_code(lat_val, lng_val, region_code)
 
+    now_iso = datetime.utcnow().isoformat()
+
     conn = get_db()
     cur = conn.cursor()
+
+    # ★ ここがポイント：
+    # 同じ device_id の最新レコードがあれば UPDATE、
+    # なければ INSERT にする
     cur.execute(
         """
-        INSERT INTO pings (
-            device_id, status, region_code, city_name,
-            area_code, lat, lng, message, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        SELECT id
+        FROM pings
+        WHERE device_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
         """,
-        (
-            device_id,
-            status,
-            region_code,
-            city_name,
-            area_code,
-            lat_val,
-            lng_val,
-            message,
-            datetime.utcnow().isoformat(),
-        ),
+        (device_id,),
     )
-    conn.commit()
-    conn.close()
+    row = cur.fetchone()
 
-    return jsonify({"ok": True}), 201
+    if row is not None:
+        # 既存レコードを上書き
+        ping_id = row["id"]
+        cur.execute(
+            """
+            UPDATE pings
+            SET status = ?,
+                region_code = ?,
+                city_name = ?,
+                area_code = ?,
+                lat = ?,
+                lng = ?,
+                message = ?,
+                created_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                region_code,
+                city_name,
+                area_code,
+                lat_val,
+                lng_val,
+                message,
+                now_iso,
+                ping_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True, "mode": "updated"}), 200
+    else:
+        # 初めての device_id → 新規作成
+        cur.execute(
+            """
+            INSERT INTO pings (
+                device_id, status, region_code, city_name,
+                area_code, lat, lng, message, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                device_id,
+                status,
+                region_code,
+                city_name,
+                area_code,
+                lat_val,
+                lng_val,
+                message,
+                now_iso,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True, "mode": "inserted"}), 201
 
 @app.route("/api/admin/ping_stats")
 def admin_ping_stats():
