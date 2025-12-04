@@ -53,7 +53,8 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-    # 以前 grid_id で作っていた人は、pings_v2.db を一度消してからこれを実行すると楽です
+
+    # --- pings テーブル（既存） ---
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS pings (
@@ -70,8 +71,42 @@ def init_db():
         )
         """
     )
+
+    # --- ★ 追加：プレミアム端末テーブル ---
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS premium_devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            device_id TEXT UNIQUE,
+            is_premium INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
+
+
+def is_premium_device(device_id: str) -> bool:
+    """device_id がプレミアムかどうかを返す（なければ False）"""
+    if not device_id:
+        return False
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT is_premium FROM premium_devices WHERE device_id = ?",
+        (device_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return False
+    return bool(row[0])
 
 
 init_db()
@@ -124,14 +159,14 @@ def create_ping():
     city_name = data.get("city_name")
     lat = data.get("lat")
     lng = data.get("lng")
-    message = data.get("message")
+    raw_message = data.get("message")
     device_id = data.get("device_id") or "unknown-device"
 
-    # ざっくりバリデーション
+    # ステータスざっくりチェック
     if status not in ALLOWED_STATUS:
         return jsonify({"error": "invalid status"}), 400
 
-    # まず float にする
+    # --- 緯度経度を float & 丸め ---
     try:
         raw_lat = float(lat) if lat is not None else None
         raw_lng = float(lng) if lng is not None else None
@@ -139,14 +174,13 @@ def create_ping():
         raw_lat = None
         raw_lng = None
 
-    # ★ 小数第2位で丸める（約 1km グリッド）
     def round_coord(v, digits=2):
         return round(v, digits) if v is not None else None
 
     lat_val = round_coord(raw_lat, 2)
     lng_val = round_coord(raw_lng, 2)
 
-    # 範囲チェック & (0,0) 無効化
+    # 範囲外 & (0,0) を無効扱い
     if lat_val is not None and lng_val is not None:
         if not (-85 <= lat_val <= 85 and -180 <= lng_val <= 180):
             lat_val = None
@@ -155,43 +189,41 @@ def create_ping():
             lat_val = None
             lng_val = None
 
-    # area_code の計算も丸めた値を使う
+    # area_code（位置OFFの場合は region_code ベースのダミー）
     area_code = compute_area_code(lat_val, lng_val, region_code)
+
+    # --- メッセージは「プレミアムだけ」許可 ---
+    premium = is_premium_device(device_id)
+    message = None
+
+    if premium and isinstance(raw_message, str):
+        msg = raw_message.strip()
+        if msg:
+            MAX_LEN = 30  # サーバ側では30文字に丸める（フロントは15文字）
+            if len(msg) > MAX_LEN:
+                msg = msg[:MAX_LEN]
+            message = msg
+    # 無料ユーザーは message = None のまま
 
     now_iso = datetime.utcnow().isoformat()
 
     conn = get_db()
     cur = conn.cursor()
 
-    # ★ ここがポイント：
-    # 同じ device_id の最新レコードがあれば UPDATE、
-    # なければ INSERT にする
+    # ★ device_id ごとに1レコードだけ持つ（UPDATE or INSERT）
     cur.execute(
-        """
-        SELECT id
-        FROM pings
-        WHERE device_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
+        "SELECT id FROM pings WHERE device_id = ? LIMIT 1",
         (device_id,),
     )
     row = cur.fetchone()
 
-    if row is not None:
-        # 既存レコードを上書き
+    if row:
         ping_id = row["id"]
         cur.execute(
             """
             UPDATE pings
-            SET status = ?,
-                region_code = ?,
-                city_name = ?,
-                area_code = ?,
-                lat = ?,
-                lng = ?,
-                message = ?,
-                created_at = ?
+            SET status = ?, region_code = ?, city_name = ?, area_code = ?,
+                lat = ?, lng = ?, message = ?, created_at = ?
             WHERE id = ?
             """,
             (
@@ -206,11 +238,7 @@ def create_ping():
                 ping_id,
             ),
         )
-        conn.commit()
-        conn.close()
-        return jsonify({"ok": True, "mode": "updated"}), 200
     else:
-        # 初めての device_id → 新規作成
         cur.execute(
             """
             INSERT INTO pings (
@@ -231,9 +259,11 @@ def create_ping():
                 now_iso,
             ),
         )
-        conn.commit()
-        conn.close()
-        return jsonify({"ok": True, "mode": "inserted"}), 201
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"ok": True, "is_premium": premium}), 201
 
 @app.route("/api/admin/ping_stats")
 def admin_ping_stats():
@@ -425,6 +455,67 @@ def cleanup_old_pings():
         }
     )
 
+
+@app.route("/api/admin/set_premium_device", methods=["POST"])
+def set_premium_device():
+    """
+    管理画面から device_id をプレミアムON/OFFする用のAPI。
+    body: { "device_id": "...", "is_premium": true/false, "token": "ADMIN_SECRET" }
+    """
+    data = request.get_json() or {}
+
+    token = data.get("token")
+    if token != ADMIN_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    device_id = data.get("device_id")
+    is_premium_flag = data.get("is_premium")
+
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    # boolに正規化（true/false, 1/0 どっちでも来てOK）
+    is_premium_flag = bool(is_premium_flag)
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    # 既にあれば UPDATE、なければ INSERT （UPSERT）
+    cur.execute(
+        """
+        INSERT INTO premium_devices (device_id, is_premium)
+        VALUES (?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET is_premium = excluded.is_premium
+        """,
+        (device_id, 1 if is_premium_flag else 0),
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "device_id": device_id,
+            "is_premium": bool(is_premium_flag),
+        }
+    )
+
+
+@app.route("/api/check_premium", methods=["GET"])
+def check_premium():
+    """
+    フロントから device_id を渡してもらい、
+    その端末がプレミアムかどうかを返すだけの軽いAPI。
+    例: /api/check_premium?device_id=hp-xxxx
+    """
+    device_id = request.args.get("device_id")
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    is_premium = is_premium_device(device_id)
+    return jsonify({"device_id": device_id, "is_premium": bool(is_premium)})
+
+
 # --- 直近30分のサマリー API --------------------------------------
 
 
@@ -561,6 +652,88 @@ def pings_map_points():
         )
 
     return jsonify(result)
+
+
+@app.route("/api/messages/by_grid", methods=["GET"])
+def messages_by_grid():
+    """
+    プレミアムユーザー向け:
+      - 指定された lat/lng を使って area_code を計算
+      - そのグリッドにいる「直近30分のプレミアムユーザーのメッセージ一覧」を返す
+
+    クエリ:
+      ?device_id=...&lat=...&lng=...
+    """
+    device_id = request.args.get("device_id")
+    lat_str = request.args.get("lat")
+    lng_str = request.args.get("lng")
+
+    if not device_id:
+        return jsonify({"error": "device_id is required"}), 400
+
+    # プレミアム判定
+    if not is_premium_device(device_id):
+        # 無料ユーザーにはメッセージを一切返さない
+        return jsonify(
+            {
+                "device_id": device_id,
+                "is_premium": False,
+                "area_code": None,
+                "messages": [],
+            }
+        )
+
+    # lat/lng が来ていない or 変ならエラー
+    try:
+        lat = float(lat_str)
+        lng = float(lng_str)
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid lat/lng"}), 400
+
+    # lat/lng を丸めて area_code を計算（create_ping と同じロジック）
+    # region_code は area_code 計算には使わないので、ダミーでOK
+    area_code = compute_area_code(lat, lng, region_code="unknown")
+
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    cutoff_iso = cutoff.isoformat()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT device_id, status, message, created_at
+        FROM pings
+        WHERE created_at >= ?
+          AND area_code = ?
+          AND message IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 50
+        """,
+        (cutoff_iso, area_code),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    messages = []
+    for row in rows:
+        messages.append(
+            {
+                "device_id": row["device_id"],
+                "status": row["status"],
+                "message": row["message"],
+                "created_at": row["created_at"],
+            }
+        )
+
+    return jsonify(
+        {
+            "device_id": device_id,
+            "is_premium": True,
+            "area_code": area_code,
+            "messages": messages,
+        }
+    )
+
 
 @app.route("/api/pings/summary_status")
 def ping_summary_status():
